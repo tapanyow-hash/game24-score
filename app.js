@@ -1,4 +1,4 @@
-﻿let isZoomedOut = true;
+let isZoomedOut = true;
 let isFetching = false;
 
 // Helper: winner อาจเป็น Object {id, name} หรือ String ID
@@ -16,80 +16,7 @@ function initTournamentBoard() {
 // =======================================================
 // Native RPC Wrapper (?????? fetch ???????)
 // =======================================================
-async function fetchRPC(payload) {
-    return new Promise((resolve, reject) => {
-        google.script.run
-            .withSuccessHandler(res => {
-                try {
-                    const data = JSON.parse(res);
-                    resolve({ 
-                        ok: true,
-                        json: async () => data 
-                    });
-                } catch(e) {
-                    reject(e);
-                }
-            })
-            .withFailureHandler(reject)
-            .executeActionRPC(payload);
-    });
-}
-
-async function fetchTournamentData() {
-    if (isFetching) return; // Prevent overlapping requests
-    isFetching = true;
-    
-    try {
-        // ใช้ google.script.run แทน fetch เพื่อแก้ปัญหา Redirect 404
-        const responseText = await new Promise((resolve, reject) => {
-            google.script.run
-                .withSuccessHandler(resolve)
-                .withFailureHandler(reject)
-                .getTournamentDataForFrontend();
-        });
-        
-        try {
-            window.tournamentAllData = JSON.parse(responseText);
-        } catch (parseError) {
-            console.error("Failed to parse JSON. Raw response from Google:", responseText);
-            const board = document.getElementById('tournament-board');
-            if (board && !board.querySelector('.match')) {
-                // Show the raw text in the UI to help debug
-                board.innerHTML = '<div style="color:red; padding: 20px;">' +
-                    '<h2>Failed to connect to database.</h2>' +
-                    '<p><strong>Error Details:</strong></p>' +
-                    '<pre style="text-align:left; background:#fff; padding:10px; border:1px solid #ccc; max-width:100%; overflow:auto;">' + 
-                    responseText.substring(0, 1000).replace(/</g, "&lt;").replace(/>/g, "&gt;") + 
-                    '</pre></div>';
-            }
-            return;
-        }
-        
-        if (window.tournamentAllData.error) {
-            console.error("Backend Error:", window.tournamentAllData.error);
-        }
-        
-        const tournamentData = window.tournamentAllData[window.DIVISION_KEY];
-        
-        renderTournament(tournamentData);
-        if (typeof renderResults === 'function') {
-            renderResults(tournamentData);
-        }
-        if (typeof renderAnnouncerView === 'function') {
-            renderAnnouncerView();
-        }
-    } catch (error) {
-        console.error("Failed to fetch API data", error);
-        
-        // Only show error on the board if it's completely empty
-        const board = document.getElementById('tournament-board');
-        if (!board.querySelector('.match')) {
-            board.innerHTML = '<h2 style="color:red; text-align:center;">Failed to connect to database.</h2>';
-        }
-    } finally {
-        isFetching = false;
-    }
-}
+async function fetchRPC(payload) { console.warn('fetchRPC disabled'); return {ok:false}; }
 
 function renderTournament(data) {
     try {
@@ -208,6 +135,442 @@ function createMatchElement(match) {
     const badge = document.createElement('div');
     badge.className = 'match-id';
     badge.textContent = match.id;
+    matchDiv.appendChild(badge);
+    
+    const p1Div = createPlayerElement(player1, match, 1);
+    const p2Div = createPlayerElement(player2, match, 2);
+    
+    matchDiv.appendChild(p1Div);
+    matchDiv.appendChild(p2Div);
+    
+    // Highlight if match has a winner
+    const wId = getWinnerId(match.winner);
+    if (wId) {
+        if (wId === player1.id) {
+            p1Div.classList.add('winner');
+            p2Div.classList.add('loser');
+            matchDiv.classList.add('completed');
+        } else if (wId === player2.id) {
+            p2Div.classList.add('winner');
+            p1Div.classList.add('loser');
+            matchDiv.classList.add('completed');
+        }
+    }
+    
+    // Add click event for details
+    matchDiv.onclick = () => showMatchDetails(match);
+    
+    return matchDiv;
+}
+
+function createPlayerElement(player, match, pNum) {
+    const pDiv = document.createElement('div');
+    pDiv.className = 'player';
+    
+    const wId = getWinnerId(match.winner);
+    if (wId === player.id && wId !== 'TBA') {
+        pDiv.classList.add('winner');
+    }
+
+    const isTBA = !player.id || /^[AB]\d+$/.test(player.id) === false && player.name === 'รอผู้ชนะจากรอบก่อนหน้า';
+    
+    let avatarHtml = `<div class="player-avatar"><i class="fas fa-user"></i></div>`;
+    if (!isTBA) {
+        avatarHtml = `<div class="player-avatar" style="background-color: var(--primary); color: white;"><i class="fas fa-user"></i></div>`;
+    }
+
+    // Default to show name, but if we need ID primarily in small views:
+    const mainText = isTBA ? player.name : player.id;
+    const subText = isTBA ? '' : player.name;
+
+    pDiv.innerHTML = `
+        ${avatarHtml}
+        <div class="player-info">
+            <span class="player-name">${mainText}</span>
+            ${subText ? `<span class="player-school">${subText}</span>` : ''}
+        </div>
+        <div class="player-score">${pNum === 1 ? (match.score1 || '') : (match.score2 || '')}</div>
+    `;
+    return pDiv;
+}
+
+function showMatchDetails(match) {
+    document.getElementById('modal-match-title').textContent = `Match ${match.id} Details`;
+    
+    const player1 = match.player1 || { id: '-', name: 'TBA', school: '-' };
+    const player2 = match.player2 || { id: '-', name: 'TBA', school: '-' };
+
+    document.getElementById('modal-p1-id').textContent = player1.id || '-';
+    document.getElementById('modal-p1-name').textContent = player1.name || 'TBA';
+    document.getElementById('modal-p1-school').textContent = player1.school || '';
+
+    document.getElementById('modal-p2-id').textContent = player2.id || '-';
+    document.getElementById('modal-p2-name').textContent = player2.name || 'TBA';
+    document.getElementById('modal-p2-school').textContent = player2.school || '';
+
+    document.getElementById('match-modal-overlay').classList.add('show');
+    document.getElementById('match-modal').classList.add('show');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const overlay = document.getElementById('match-modal-overlay');
+    const closeBtn = document.getElementById('modal-close-btn');
+    
+    if (overlay) {
+        overlay.addEventListener('click', () => {
+            overlay.classList.remove('show');
+            document.getElementById('match-modal').classList.remove('show');
+        });
+    }
+    
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+            document.getElementById('match-modal-overlay').classList.remove('show');
+            document.getElementById('match-modal').classList.remove('show');
+        });
+    }
+});
+
+// Zoom and Pan Logic
+let zoomLevel = 1;
+const zoomStep = 0.1;
+const minZoom = 0.3;
+const maxZoom = 2.0;
+
+function setupZoom() {
+    const board = document.getElementById('tournament-board');
+    if (!board) return;
+    
+    // No drag variables anymore, relying on native scroll
+    // Just handling mouse wheel for zoom
+    
+    board.parentElement.addEventListener('wheel', (e) => {
+        if (e.ctrlKey) {
+            e.preventDefault();
+            const delta = Math.sign(e.deltaY);
+            if (delta > 0) zoomOut();
+            else zoomIn();
+        }
+    }, { passive: false });
+}
+
+function zoomIn() {
+    if (zoomLevel < maxZoom) {
+        zoomLevel += zoomStep;
+        updateZoom();
+    }
+}
+
+function zoomOut() {
+    if (zoomLevel > minZoom) {
+        zoomLevel -= zoomStep;
+        updateZoom();
+    }
+}
+
+function resetZoom() {
+    zoomLevel = 1;
+    updateZoom();
+}
+
+function updateZoom() {
+    const board = document.getElementById('tournament-board');
+    if (board) {
+        board.style.transform = `scale(${zoomLevel})`;
+        
+        const wrapper = board.parentElement;
+        const rect = board.getBoundingClientRect();
+        
+        // Ensure the wrapper expands to fit the scaled board so scrollbars appear correctly
+        // Only adjust wrapper if board is smaller than wrapper
+        
+        board.style.transformOrigin = "top center";
+        
+        // Optionally update a zoom label if you add one to UI
+        const label = document.getElementById('zoom-level-label');
+        if (label) label.textContent = Math.round(zoomLevel * 100) + '%';
+    }
+}
+
+function setupMobileUX() {
+    // Zoom out by default on mobile
+    if (window.innerWidth < 768) {
+        zoomLevel = 0.5;
+        updateZoom();
+    }
+}
+
+// ==========================================
+// Results View Logic
+// ==========================================
+function renderResults(data) {
+    const tableBody = document.getElementById('results-table-body');
+    if (!tableBody) return;
+    
+    tableBody.innerHTML = '';
+    
+    let allMatches = [];
+    
+    const extractMatches = (bracket) => {
+        if (!bracket) return;
+        bracket.forEach((round, roundIndex) => {
+            round.forEach(match => {
+                if (match.winner) {
+                    allMatches.push({...match, roundName: \`Round \${roundIndex + 1}\`});
+                }
+            });
+        });
+    };
+    
+    extractMatches(data.bracketA);
+    extractMatches(data.bracketB);
+    
+    if (data.finalMatch && data.finalMatch.winner) {
+        allMatches.push({...data.finalMatch, roundName: 'Final'});
+    }
+    if (data.thirdPlaceMatch && data.thirdPlaceMatch.winner) {
+        allMatches.push({...data.thirdPlaceMatch, roundName: '3rd Place'});
+    }
+    
+    // Sort by Match ID
+    allMatches.sort((a, b) => {
+        // basic string sort based on ID (e.g. A1, A2... B1, B2)
+        return a.id.localeCompare(b.id, 'en', { numeric: true });
+    });
+    
+    if (allMatches.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--gray);">ยังไม่มีผลการแข่งขัน</td></tr>';
+        return;
+    }
+    
+    allMatches.forEach(match => {
+        const tr = document.createElement('tr');
+        
+        const wId = getWinnerId(match.winner);
+        const p1Win = wId === (match.player1 ? match.player1.id : null);
+        const p2Win = wId === (match.player2 ? match.player2.id : null);
+        
+        tr.innerHTML = \`
+            <td><strong>\${match.id}</strong></td>
+            <td>\${match.roundName}</td>
+            <td class="\${p1Win ? 'winner-cell' : 'loser-cell'}">
+                \${match.player1 ? match.player1.id + ' ' + (match.player1.name || '') : '-'}
+            </td>
+            <td class="\${p2Win ? 'winner-cell' : 'loser-cell'}">
+                \${match.player2 ? match.player2.id + ' ' + (match.player2.name || '') : '-'}
+            </td>
+            <td style="text-align:center; font-weight:bold;">
+                \${match.score1 || 0} - \${match.score2 || 0}
+            </td>
+        \`;
+        tableBody.appendChild(tr);
+    });
+}
+
+// ==========================================
+// Admin & Setup Logic
+// ==========================================
+function extractMatchesForDivision(divisionData, divName) {
+    let pendingA = [];
+    let pendingB = [];
+    let assignedA = [];
+    let assignedB = [];
+    
+    if (!divisionData) return { pending: { A: [], B: [] }, assigned: { A: [], B: [] } };
+    
+    const processRound = (round, bracketName, roundNum) => {
+        round.forEach(match => {
+            // Ignore if match is already won, or doesn't have 2 actual players
+            if (match.winner) return;
+            
+            // Check if players are real (not BYE, not waiting)
+            const isValidPlayer = (p) => p && p.id && p.id !== "BYE" && p.id !== "TBA" && !p.id.includes("Winner");
+            
+            // In setup view, we want to see matches that might have TBA but are structurally there.
+            // But usually, we only announce when players are known.
+            
+            const matchInfo = {
+                ...match,
+                division: divName,
+                bracketName: bracketName,
+                roundInfo: \`รอบที่ \${roundNum + 1}\`
+            };
+            
+            const isAssigned = match.table !== undefined && match.table !== null && match.table !== "";
+            
+            if (isAssigned) {
+                if (bracketName === 'A') assignedA.push(matchInfo);
+                else assignedB.push(matchInfo);
+            } else {
+                if (bracketName === 'A') pendingA.push(matchInfo);
+                else pendingB.push(matchInfo);
+            }
+        });
+    };
+
+    if (divisionData.bracketA) {
+        divisionData.bracketA.forEach((r, i) => processRound(r, 'A', i));
+    }
+    if (divisionData.bracketB) {
+        divisionData.bracketB.forEach((r, i) => processRound(r, 'B', i));
+    }
+    
+    // Add Finals
+    const processFinal = (match, bracketName, roundInfo) => {
+        if (!match || match.winner) return;
+        const matchInfo = {
+            ...match,
+            division: divName,
+            bracketName: bracketName,
+            roundInfo: roundInfo
+        };
+        const isAssigned = match.table !== undefined && match.table !== null && match.table !== "";
+        if (isAssigned) assignedA.push(matchInfo);
+        else pendingA.push(matchInfo);
+    };
+    
+    processFinal(divisionData.finalMatch, 'Finals', 'ชิงชนะเลิศ');
+    processFinal(divisionData.thirdPlaceMatch, 'Finals', 'ชิงอันดับ 3');
+
+    return { 
+        pending: { A: pendingA, B: pendingB },
+        assigned: { A: assignedA, B: assignedB }
+    };
+}
+
+let selectedMatchTables = new Map(); // key: backendId (M/H + matchId), value: tableNumber
+
+// Find reference to the original match object in the global data structure
+function findOriginalMatch(matchId, divisionName) {
+    if (!window.tournamentAllData) return null;
+    const divData = divisionName === 'ม.ต้น' ? window.tournamentAllData.middle : window.tournamentAllData.high;
+    if (!divData) return null;
+    
+    let found = null;
+    const searchBracket = (bracket) => {
+        if(!bracket) return;
+        bracket.forEach(r => r.forEach(m => {
+            if (m.id === matchId) found = m;
+        }));
+    };
+    
+    searchBracket(divData.bracketA);
+    if(found) return found;
+    searchBracket(divData.bracketB);
+    if(found) return found;
+    
+    if (divData.finalMatch && divData.finalMatch.id === matchId) return divData.finalMatch;
+    if (divData.thirdPlaceMatch && divData.thirdPlaceMatch.id === matchId) return divData.thirdPlaceMatch;
+    
+    return null;
+}
+
+function selectPendingMatch(matchId, divisionName) {
+    const setupTablesInput = document.getElementById('setup-tables');
+    let totalTables = setupTablesInput ? parseInt(setupTablesInput.value) || 7 : 7;
+    
+    // Check currently occupied tables across BOTH divisions directly from global state
+    const occupiedTables = new Set();
+    
+    const checkOccupied = (data) => {
+        if(!data) return;
+        const checkMatch = (m) => {
+            if (m && m.table && !m.winner) {
+                occupiedTables.add(parseInt(m.table));
+            }
+        };
+        ['bracketA', 'bracketB'].forEach(k => {
+            if(data[k]) data[k].forEach(r => r.forEach(checkMatch));
+        });
+        checkMatch(data.finalMatch);
+        checkMatch(data.thirdPlaceMatch);
+    };
+    
+    checkOccupied(window.tournamentAllData.middle);
+    checkOccupied(window.tournamentAllData.high);
+    
+    // Add locally selected tables that haven't been saved yet
+    for (let t of selectedMatchTables.values()) {
+        occupiedTables.add(parseInt(t));
+    }
+    
+    const prefix = divisionName === 'ม.ต้น' ? 'M' : 'H';
+    const backendId = prefix + matchId;
+
+    if (selectedMatchTables.has(backendId)) {
+        // Deselect
+        selectedMatchTables.delete(backendId);
+    } else {
+        // Assign first available table
+        let assigned = false;
+        for (let i = 1; i <= totalTables; i++) {
+            if (!occupiedTables.has(i)) {
+                selectedMatchTables.set(backendId, i);
+                assigned = true;
+                break;
+            }
+        }
+        if (!assigned) {
+            alert(\`โต๊ะเต็ม! (มีการใช้โต๊ะครบ \${totalTables} โต๊ะแล้ว)\`);
+            return;
+        }
+    }
+    
+    renderAssignmentView();
+}
+
+function renderAssignmentView() {
+    const gridDiv = document.getElementById('assignment-grid');
+    if (!gridDiv) return;
+    gridDiv.innerHTML = '';
+    
+    if (!window.tournamentAllData) return;
+    
+    const midMatches = extractMatchesForDivision(window.tournamentAllData.middle, 'ม.ต้น');
+    const highMatches = extractMatchesForDivision(window.tournamentAllData.high, 'ม.ปลาย');
+    
+    const midAllPending = [...midMatches.pending.A, ...midMatches.pending.B];
+    const highAllPending = [...highMatches.pending.A, ...highMatches.pending.B];
+    
+    const dataByCol = [
+        { title: 'ม.ต้น (รอแข่ง)', id: 'col-mid', div: 'ม.ต้น', matches: midAllPending },
+        { title: 'ม.ปลาย (รอแข่ง)', id: 'col-high', div: 'ม.ปลาย', matches: highAllPending }
+    ];
+    
+    // Collect all unique round names to align them horizontally
+    const allRoundsSet = new Set();
+    dataByCol.forEach(col => col.matches.forEach(m => allRoundsSet.add(m.roundInfo || 'รอบอื่นๆ')));
+    
+    // Sort rounds safely
+    const roundsArray = Array.from(allRoundsSet).sort((a, b) => {
+        const numA = parseInt(a.replace(/[^0-9]/g, '')) || 99;
+        const numB = parseInt(b.replace(/[^0-9]/g, '')) || 99;
+        return numA - numB;
+    });
+    
+    // Map to keep track of section elements by round to equalize their heights later
+    const roundElementsMap = {};
+    roundsArray.forEach(r => roundElementsMap[r] = []);
+    
+    dataByCol.forEach(colData => {
+        const colDiv = document.createElement('div');
+        colDiv.className = 'assignment-column';
+        colDiv.id = colData.id;
+        
+        // Header
+        const colHeader = document.createElement('h3');
+        colHeader.className = 'assignment-col-header';
+        colHeader.textContent = colData.title;
+        colHeader.style.color = colData.div === 'ม.ปลาย' ? '#28a745' : 'var(--primary)';
+        colDiv.appendChild(colHeader);
+        
+        gridDiv.appendChild(colDiv);
+    });
+    
+    // Build round sections inside each column
+    roundsArray.forEach(roundName => {
+        dataByCol.forEach(colData => {
+            const colDiv = document.getElementById(colData.id);
             if (!colDiv) return;
             
             const roundSection = document.createElement('div');
@@ -266,23 +629,23 @@ function createMatchElement(match) {
                            assignedText = 'โต๊ะ ' + match.table;
                         }
                         
-                        card.innerHTML = `
+                        card.innerHTML = \`
                             <div class="pending-card-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ced4da; padding-bottom: 8px; margin-bottom: 10px;">
-                                <span style="font-weight: 800; color: #6c757d; font-size: 0.9rem;">${match.id}</span>
+                                <span style="font-weight: 800; color: #6c757d; font-size: 0.9rem;">\${match.id}</span>
                                 <span style="font-size: 0.8rem; font-weight: bold; color: #6c757d;">
-                                    ${assignedText}
+                                    \${assignedText}
                                 </span>
                             </div>
                             <div style="display: flex; flex-direction: row; align-items: center; justify-content: center;">
                                 <div class="pending-card-players" style="display: flex; align-items: center; flex-direction: row; font-size: 1.1rem; font-weight: 800; color: #6c757d; margin: 0;">
-                                    <div style="${p1IsTba ? 'color: #dc3545;' : ''}">${p1Display}</div>
+                                    <div style="\${p1IsTba ? 'color: #dc3545;' : ''}">\${p1Display}</div>
                                     <div class="pending-card-vs" style="margin: 0 15px; font-size: 0.8rem; color: #adb5bd;">VS</div>
-                                    <div style="${p2IsTba ? 'color: #dc3545;' : ''}">${p2Display}</div>
+                                    <div style="\${p2IsTba ? 'color: #dc3545;' : ''}">\${p2Display}</div>
                                 </div>
                             </div>
-                        `;
+                        \`;
                     } else {
-                        card.className = `pending-card ${isSelected ? 'selected' : ''}`;
+                        card.className = \`pending-card \${isSelected ? 'selected' : ''}\`;
                         card.onclick = () => selectPendingMatch(match.id, colData.div);
                         
                         if (hasTba) {
@@ -290,21 +653,21 @@ function createMatchElement(match) {
                             card.style.borderColor = '#ffcaca';
                         }
                         
-                        card.innerHTML = `
-                            <div class="pending-card-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid ${hasTba ? '#ffcaca' : '#f1f3f5'}; padding-bottom: 8px; margin-bottom: 10px;">
-                                <span style="font-weight: 800; color: ${hasTba ? '#dc3545' : 'var(--primary)'}; font-size: 0.9rem;">${match.id}</span>
-                                <span style="font-size: 0.8rem; font-weight: bold; color: ${isSelected ? 'var(--primary)' : '#ced4da'};">
-                                    ${isSelected ? 'โต๊ะ ' + tableNumber : '<i class="fas fa-check-circle check-icon" style="opacity:0;"></i>'}
+                        card.innerHTML = \`
+                            <div class="pending-card-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid \${hasTba ? '#ffcaca' : '#f1f3f5'}; padding-bottom: 8px; margin-bottom: 10px;">
+                                <span style="font-weight: 800; color: \${hasTba ? '#dc3545' : 'var(--primary)'}; font-size: 0.9rem;">\${match.id}</span>
+                                <span style="font-size: 0.8rem; font-weight: bold; color: \${isSelected ? 'var(--primary)' : '#ced4da'};">
+                                    \${isSelected ? 'โต๊ะ ' + tableNumber : '<i class="fas fa-check-circle check-icon" style="opacity:0;"></i>'}
                                 </span>
                             </div>
                             <div style="display: flex; flex-direction: row; align-items: center; justify-content: center;">
                                 <div class="pending-card-players" style="display: flex; align-items: center; flex-direction: row; font-size: 1.1rem; font-weight: 800; color: #2b2d42; margin: 0;">
-                                    <div style="${p1IsTba ? 'color: #dc3545;' : ''}">${p1Display}</div>
+                                    <div style="\${p1IsTba ? 'color: #dc3545;' : ''}">\${p1Display}</div>
                                     <div class="pending-card-vs" style="margin: 0 15px; font-size: 0.8rem; color: #adb5bd;">VS</div>
-                                    <div style="${p2IsTba ? 'color: #dc3545;' : ''}">${p2Display}</div>
+                                    <div style="\${p2IsTba ? 'color: #dc3545;' : ''}">\${p2Display}</div>
                                 </div>
                             </div>
-                        `;
+                        \`;
                     }
                     roundSection.appendChild(card);
                 });
@@ -475,19 +838,19 @@ function renderAnnouncerView() {
         }
         const bgColor = match.isAnnounced ? 'var(--gray)' : labelColor;
         
-        card.innerHTML = `
-            <div onclick="toggleAnnounceStatus('${match.id}', '${match.division}', this, '${labelColor}')" data-clicked="${isAnnouncedStr}" style="background-color: ${bgColor}; color: white; width: 50px; height: 50px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-right: 15px; flex-shrink: 0; cursor: pointer; transition: 0.2s;" title="คลิกเพื่อทำเครื่องหมายว่าเรียกแล้ว/ยกเลิกเรียก">
+        card.innerHTML = \`
+            <div onclick="toggleAnnounceStatus('\${match.id}', '\${match.division}', this, '\${labelColor}')" data-clicked="\${isAnnouncedStr}" style="background-color: \${bgColor}; color: white; width: 50px; height: 50px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-right: 15px; flex-shrink: 0; cursor: pointer; transition: 0.2s;" title="คลิกเพื่อทำเครื่องหมายว่าเรียกแล้ว/ยกเลิกเรียก">
                 <i class="fas fa-bullhorn"></i>
             </div>
             <div style="flex-grow: 1;">
-                <div style="font-weight: bold; color: ${labelColor}; margin-bottom: 5px;">${match.id} <span style="color: var(--gray); font-weight: normal; font-size: 0.85rem; margin-left: 10px;">(โต๊ะ ${match.table} | ${match.division} - ${match.roundInfo})</span></div>
+                <div style="font-weight: bold; color: \${labelColor}; margin-bottom: 5px;">\${match.id} <span style="color: var(--gray); font-weight: normal; font-size: 0.85rem; margin-left: 10px;">(โต๊ะ \${match.table} | \${match.division} - \${match.roundInfo})</span></div>
                 <div style="font-size: 0.95rem;">
-                    <span style="font-weight: 600;">${match.player1.id}</span> ${p1Name} 
+                    <span style="font-weight: 600;">\${match.player1.id}</span> \${p1Name} 
                     <span style="color: #adb5bd; margin: 0 10px; font-size: 0.8rem;">VS</span> 
-                    <span style="font-weight: 600;">${match.player2.id}</span> ${p2Name}
+                    <span style="font-weight: 600;">\${match.player2.id}</span> \${p2Name}
                 </div>
             </div>
-        `;
+        \`;
         listDiv.appendChild(card);
     });
 }
@@ -577,7 +940,7 @@ function triggerAutoAssign() {
     }
     
     if (assignCount > 0) {
-        alert(`จัดโต๊ะอัตโนมัติสำเร็จ จำนวน ${assignCount} คู่`);
+        alert(\`จัดโต๊ะอัตโนมัติสำเร็จ จำนวน \${assignCount} คู่\`);
         renderAssignmentView();
     } else {
         alert("ไม่มีคู่ที่พร้อมแข่ง หรือ โต๊ะเต็มหมดแล้ว");
@@ -601,7 +964,7 @@ function getAllMatchesFlat(data, divisionName) {
                     ...match,
                     division: divisionName,
                     bracket: bracketKey === 'bracketA' ? 'สาย A' : 'สาย B',
-                    roundInfo: `รอบที่ ${roundIndex + 1}`
+                    roundInfo: \`รอบที่ \${roundIndex + 1}\`
                 });
             });
         });
@@ -656,28 +1019,28 @@ function renderManualScoreView() {
             card.className = 'admin-match-card';
             card.onclick = () => openScoreModal(match);
             
-            const tableStr = `(โต๊ะ ${match.table})`;
+            const tableStr = \`(โต๊ะ \${match.table})\`;
             const isHigh = match.division === 'ม.ปลาย';
             const badgeColor = isHigh ? '#28a745' : 'var(--primary)';
             
-            card.innerHTML = `
+            card.innerHTML = \`
                 <div class="admin-match-header">
                     <div style="display: flex; gap: 10px; align-items: center;">
-                        <span class="admin-match-badge" style="background-color: ${badgeColor};">${match.id}</span>
-                        <span style="font-size: 0.85rem; font-weight: bold; color: ${badgeColor}; border: 1px solid ${badgeColor}; padding: 2px 6px; border-radius: 4px;">${match.division}</span>
+                        <span class="admin-match-badge" style="background-color: \${badgeColor};">\${match.id}</span>
+                        <span style="font-size: 0.85rem; font-weight: bold; color: \${badgeColor}; border: 1px solid \${badgeColor}; padding: 2px 6px; border-radius: 4px;">\${match.division}</span>
                     </div>
-                    <span>${match.bracket} - ${match.roundInfo} <strong style="color:var(--primary);">${tableStr}</strong></span>
+                    <span>\${match.bracket} - \${match.roundInfo} <strong style="color:var(--primary);">\${tableStr}</strong></span>
                 </div>
                 <div class="admin-player-row">
-                    <span class="admin-player-id">${match.player1.id}</span>
-                    <span class="admin-player-name">${match.player1.name}</span>
+                    <span class="admin-player-id">\${match.player1.id}</span>
+                    <span class="admin-player-name">\${match.player1.name}</span>
                 </div>
                 <div class="admin-vs-divider">VS</div>
                 <div class="admin-player-row">
-                    <span class="admin-player-id">${match.player2.id}</span>
-                    <span class="admin-player-name">${match.player2.name}</span>
+                    <span class="admin-player-id">\${match.player2.id}</span>
+                    <span class="admin-player-name">\${match.player2.name}</span>
                 </div>
-            `;
+            \`;
             topSection.appendChild(card);
         });
     }
@@ -701,7 +1064,7 @@ function renderManualScoreView() {
     });
     
     const bottomSection = document.createElement('div');
-    bottomSection.innerHTML = `<h3 style="color: #28a745; margin-bottom: 15px;"><i class="fas fa-check-circle"></i> ลงคะแนนสมบูรณ์ (${currentDivisionName})</h3>`;
+    bottomSection.innerHTML = \`<h3 style="color: #28a745; margin-bottom: 15px;"><i class="fas fa-check-circle"></i> ลงคะแนนสมบูรณ์ (\${currentDivisionName})</h3>\`;
     
     if (completedMatches.length === 0) {
         bottomSection.innerHTML += '<div style="text-align: center; color: var(--gray); padding: 20px 0;">ยังไม่มีการแข่งขันที่ลงคะแนนเสร็จสิ้น</div>';
@@ -712,25 +1075,25 @@ function renderManualScoreView() {
             card.style.opacity = '0.8'; // slightly dim completed matches
             card.onclick = () => openScoreModal(match);
             
-            const tableStr = match.table ? `(โต๊ะ ${match.table})` : '';
+            const tableStr = match.table ? \`(โต๊ะ \${match.table})\` : '';
             const isHigh = match.division === 'ม.ปลาย';
             const badgeColor = isHigh ? '#28a745' : 'var(--primary)';
             
-            card.innerHTML = `
+            card.innerHTML = \`
                 <div class="admin-match-header">
-                    <span class="admin-match-badge" style="background-color: #6c757d;">${match.id}</span>
-                    <span>${match.bracket} - ${match.roundInfo} <strong style="color:var(--gray);">${tableStr}</strong></span>
+                    <span class="admin-match-badge" style="background-color: #6c757d;">\${match.id}</span>
+                    <span>\${match.bracket} - \${match.roundInfo} <strong style="color:var(--gray);">\${tableStr}</strong></span>
                 </div>
                 <div class="admin-player-row">
-                    <span class="admin-player-id">${match.player1.id}</span>
-                    <span class="admin-player-name">${match.player1.name} <span style="color: ${match.winner === match.player1.id ? '#28a745' : '#dc3545'}; font-size: 0.85rem; margin-left: 5px;">[${match.score1 || 0}]</span></span>
+                    <span class="admin-player-id">\${match.player1.id}</span>
+                    <span class="admin-player-name">\${match.player1.name} <span style="color: \${match.winner === match.player1.id ? '#28a745' : '#dc3545'}; font-size: 0.85rem; margin-left: 5px;">[\${match.score1 || 0}]</span></span>
                 </div>
                 <div class="admin-vs-divider">VS</div>
                 <div class="admin-player-row">
-                    <span class="admin-player-id">${match.player2.id}</span>
-                    <span class="admin-player-name">${match.player2.name} <span style="color: ${match.winner === match.player2.id ? '#28a745' : '#dc3545'}; font-size: 0.85rem; margin-left: 5px;">[${match.score2 || 0}]</span></span>
+                    <span class="admin-player-id">\${match.player2.id}</span>
+                    <span class="admin-player-name">\${match.player2.name} <span style="color: \${match.winner === match.player2.id ? '#28a745' : '#dc3545'}; font-size: 0.85rem; margin-left: 5px;">[\${match.score2 || 0}]</span></span>
                 </div>
-            `;
+            \`;
             bottomSection.appendChild(card);
         });
     }
@@ -740,8 +1103,8 @@ function renderManualScoreView() {
 function openScoreModal(match) {
     manualScoreCurrentMatch = match;
     document.getElementById('modal-score-match-id').textContent = match.id;
-    document.getElementById('p1-score-name').textContent = `${match.player1.id} ${match.player1.name}`;
-    document.getElementById('p2-score-name').textContent = `${match.player2.id} ${match.player2.name}`;
+    document.getElementById('p1-score-name').textContent = \`\${match.player1.id} \${match.player1.name}\`;
+    document.getElementById('p2-score-name').textContent = \`\${match.player2.id} \${match.player2.name}\`;
     
     document.getElementById('p1-score-input').value = '';
     document.getElementById('p2-score-input').value = '';
@@ -811,11 +1174,11 @@ function submitMatchResult() {
     if (p1FoulState) {
         winner = manualScoreCurrentMatch.player2;
         loser = manualScoreCurrentMatch.player1;
-        reason = `${manualScoreCurrentMatch.player1.name} ทำฟาวล์`;
+        reason = \`\${manualScoreCurrentMatch.player1.name} ทำฟาวล์\`;
     } else if (p2FoulState) {
         winner = manualScoreCurrentMatch.player1;
         loser = manualScoreCurrentMatch.player2;
-        reason = `${manualScoreCurrentMatch.player2.name} ทำฟาวล์`;
+        reason = \`\${manualScoreCurrentMatch.player2.name} ทำฟาวล์\`;
     } else {
         if (s1 === s2) {
             alert("คะแนนเท่ากัน! (ยังไม่รองรับเสมอ) กรุณาตัดสินใหม่");
@@ -825,15 +1188,15 @@ function submitMatchResult() {
         if (s1 > s2) {
             winner = manualScoreCurrentMatch.player1;
             loser = manualScoreCurrentMatch.player2;
-            reason = `ชนะคะแนน ${s1} - ${s2}`;
+            reason = \`ชนะคะแนน \${s1} - \${s2}\`;
         } else {
             winner = manualScoreCurrentMatch.player2;
             loser = manualScoreCurrentMatch.player1;
-            reason = `ชนะคะแนน ${s2} - ${s1}`;
+            reason = \`ชนะคะแนน \${s2} - \${s1}\`;
         }
     }
 
-    if (confirm(`ยืนยันผลการแข่งขัน:\nผู้ชนะ: ${winner.name}\nเหตุผล: ${reason}\n\nคุณต้องการบันทึกข้อมูลหรือไม่?`)) {
+    if (confirm(\`ยืนยันผลการแข่งขัน:\nผู้ชนะ: \${winner.name}\nเหตุผล: \${reason}\n\nคุณต้องการบันทึกข้อมูลหรือไม่?\`)) {
         
         // Derive division from the match itself
         const divisionStr = manualScoreCurrentMatch.division === 'ม.ต้น' ? 'Middle' : 'High';
@@ -864,7 +1227,7 @@ function submitMatchResult() {
         })
         .then(data => {
             if (data.success) {
-                alert(`บันทึกผลการแข่งขันสำเร็จ!`);
+                alert(\`บันทึกผลการแข่งขันสำเร็จ!\`);
                 closeScoreModal();
                 // Force fetch new data from backend to update bracket
                 if (typeof fetchTournamentData === 'function') {
@@ -893,11 +1256,6 @@ function submitMatchResult() {
 // ==========================================
 // Authentication System (Token-based SPA)
 // ==========================================
-function openLoginModal() {
-    document.getElementById('login-modal').classList.add('show');
-    document.getElementById('login-modal-overlay').classList.add('show');
-}
-
 function closeLoginModal() {
     document.getElementById('login-modal').classList.remove('show');
     document.getElementById('login-modal-overlay').classList.remove('show');
@@ -938,195 +1296,168 @@ function logout() {
     window.location.reload();
 }
 
-async function verifyAdminToken() {
-    const token = sessionStorage.getItem('adminToken');
-    if (!token) return;
-    
+
+// ระบบจัดการสถานะ
+document.addEventListener('DOMContentLoaded', () => {
     try {
-        const res = await fetchRPC({ action: 'verifyToken', token: token });
-        const data = await res.json();
-        if (data.success) {
-            // ปลดล็อกเมนู Admin อัตโนมัติถ้ารหัสยังไม่หมดอายุ
-            document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('admin-only'));
-            const loginBtn = document.getElementById('nav-login-btn');
-            if(loginBtn) loginBtn.style.display = 'none';
+        window.viewDivisionStates = JSON.parse(localStorage.getItem('viewDivisionStates')) || {};
+    } catch (e) {
+        window.viewDivisionStates = {};
+    }
+    window.currentActiveView = localStorage.getItem('activeView') || 'view-home';
+    const savedView = window.currentActiveView;
+    window.DIVISION_KEY = window.viewDivisionStates[savedView] || localStorage.getItem('activeDivision') || 'middle';
+    
+    // ซิงค์ UI สวิตช์ให้ตรงกับค่าที่บันทึกไว้
+    const switchBtns = document.querySelectorAll('#header-division-switch button');
+    switchBtns.forEach(btn => {
+        if ((window.DIVISION_KEY === 'middle' && btn.textContent === 'ม.ต้น') ||
+            (window.DIVISION_KEY === 'high' && btn.textContent === 'ม.ปลาย')) {
+            btn.classList.add('active');
         } else {
-            // Token หมดอายุ
-            sessionStorage.removeItem('adminToken');
+            btn.classList.remove('active');
         }
-    } catch(err) {
-        console.error('Failed to verify token', err);
+    });
+    
+    // เรียกฟังก์ชันเริ่มต้นจาก script.html
+    if (typeof initTournamentBoard === 'function') {
+        initTournamentBoard();
+    } else if (typeof setupMobileUX === 'function') {
+        setupMobileUX();
+        if (typeof setupZoom === 'function') setupZoom();
+    }
+    
+    // โหลดข้อมูลครั้งแรก
+    if (typeof fetchTournamentData === 'function') {
+        fetchTournamentData();
+    }
+    
+    // เปลี่ยนไปหน้าที่บันทึกไว้
+    switchView(savedView);
+});
+
+// ???????????????? (SPA Navigation)
+function switchView(viewId) {
+    // ?????????????????????????????? (????????????????????????? admin/public)
+    if (!document.getElementById(viewId)) {
+        viewId = 'view-home';
+    }
+    
+    // ???????????????????? localStorage
+    localStorage.setItem('activeView', viewId);
+    window.currentActiveView = viewId;
+    
+    // ???????????
+    document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
+    // ????????????????????????
+    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    
+    // ????????????????
+    document.getElementById(viewId).classList.add('active');
+    
+    // ????/???? Switch ???????????????????????????? (???? ?????????????, ????????????????)
+    const switchableViews = ['view-tournaments', 'view-results', 'view-manual-score', 'view-assignment'];
+    if (switchableViews.includes(viewId)) {
+        document.getElementById('header-division-switch').style.display = 'flex';
+        
+        // Read and apply division for this view
+        window.DIVISION_KEY = window.viewDivisionStates[viewId] || localStorage.getItem('activeDivision') || 'middle';
+        const switchBtns = document.querySelectorAll('#header-division-switch button');
+        switchBtns.forEach(btn => {
+            if ((window.DIVISION_KEY === 'middle' && btn.textContent === 'ม.ต้น') ||
+                (window.DIVISION_KEY === 'high' && btn.textContent === 'ม.ปลาย')) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
+    } else {
+        document.getElementById('header-division-switch').style.display = 'none';
+    }
+    
+    if (viewId === 'view-assignment') {
+        document.getElementById('header-auto-assign').style.display = 'flex';
+    } else {
+        document.getElementById('header-auto-assign').style.display = 'none';
+    }
+    
+    
+    // ??????????????????
+    const activeNav = document.querySelector(\`.nav-item[data-target="\${viewId}"]\`);
+    if (activeNav) {
+        activeNav.classList.add('active');
+        // ?????? Title ??????????
+        document.getElementById('current-page-title').textContent = activeNav.textContent.trim();
+    }
+    
+    // ???????????????????????????????????????
+    if (viewId === 'view-tournaments' && typeof updateZoom === 'function') {
+        setTimeout(updateZoom, 50);
+    }
+    
+    // ถ้าเลือกเมนูจัดโต๊ะ ให้ดึงข้อมูลมาแสดงใหม่
+    if (viewId === 'view-assignment' && typeof renderAssignmentView === 'function') {
+        renderAssignmentView();
+    }
+
+    if (viewId === 'view-manual-score' && typeof renderManualScoreView === 'function') {
+        renderManualScoreView();
+    }
+
+    // Trigger specific rendering based on view
+    if (viewId === 'view-announcer') {
+        if (typeof renderAnnouncerView === 'function') {
+            renderAnnouncerView();
+        }
+    }
+    
+    // ปิด Sidebar บนมือถืออัตโนมัติ
+    if (window.innerWidth <= 768) {
+        document.getElementById('sidebar').classList.remove('show');
+        document.getElementById('sidebarOverlay').classList.remove('show');
     }
 }
 
-// ระบบจัดการสถานะ
-        document.addEventListener('DOMContentLoaded', () => {
-            try {
-                window.viewDivisionStates = JSON.parse(localStorage.getItem('viewDivisionStates')) || {};
-            } catch (e) {
-                window.viewDivisionStates = {};
-            }
-            window.currentActiveView = localStorage.getItem('activeView') || 'view-home';
-            const savedView = window.currentActiveView;
-            window.DIVISION_KEY = window.viewDivisionStates[savedView] || localStorage.getItem('activeDivision') || 'middle';
-            
-            // ซิงค์ UI สวิตช์ให้ตรงกับค่าที่บันทึกไว้
-            const switchBtns = document.querySelectorAll('#header-division-switch button');
-            switchBtns.forEach(btn => {
-                if ((window.DIVISION_KEY === 'middle' && btn.textContent === 'ม.ต้น') ||
-                    (window.DIVISION_KEY === 'high' && btn.textContent === 'ม.ปลาย')) {
-                    btn.classList.add('active');
-                } else {
-                    btn.classList.remove('active');
-                }
-            });
-            
-            // เรียกฟังก์ชันเริ่มต้นจาก script.html
-            if (typeof initTournamentBoard === 'function') {
-                initTournamentBoard();
-            } else if (typeof setupMobileUX === 'function') {
-                setupMobileUX();
-                if (typeof setupZoom === 'function') setupZoom();
-            }
-            
-            // โหลดข้อมูลครั้งแรก
-            if (typeof fetchTournamentData === 'function') {
-                fetchTournamentData();
-                // ปิดการอัปเดตอัตโนมัติ 10 วินาที เพื่อลดภาระของ Database และลดโอกาส GAS ล่ม
-                // setInterval(fetchTournamentData, 10000);
-            }
-            
-            // ตรวจสอบ Token เมื่อโหลดหน้าเว็บ
-            if (typeof verifyAdminToken === 'function') verifyAdminToken();
-            
-            // เปลี่ยนไปหน้าที่บันทึกไว้
-            switchView(savedView);
-        });
+// ????????????/??? Sidebar ????????
+function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('show');
+    document.getElementById('sidebarOverlay').classList.toggle('show');
+}
 
-        // ???????????????? (SPA Navigation)
-        function switchView(viewId) {
-            // ?????????????????????????????? (????????????????????????? admin/public)
-            if (!document.getElementById(viewId)) {
-                viewId = 'view-home';
-            }
-            
-            // ???????????????????? localStorage
-            localStorage.setItem('activeView', viewId);
-            window.currentActiveView = viewId;
-            
-            // ???????????
-            document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
-            // ????????????????????????
-            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-            
-            // ????????????????
-            document.getElementById(viewId).classList.add('active');
-            
-            // ????/???? Switch ???????????????????????????? (???? ?????????????, ????????????????)
-            const switchableViews = ['view-tournaments', 'view-results', 'view-manual-score', 'view-assignment'];
-            if (switchableViews.includes(viewId)) {
-                document.getElementById('header-division-switch').style.display = 'flex';
-                
-                // Read and apply division for this view
-                window.DIVISION_KEY = window.viewDivisionStates[viewId] || localStorage.getItem('activeDivision') || 'middle';
-                const switchBtns = document.querySelectorAll('#header-division-switch button');
-                switchBtns.forEach(btn => {
-                    if ((window.DIVISION_KEY === 'middle' && btn.textContent === 'ม.ต้น') ||
-                        (window.DIVISION_KEY === 'high' && btn.textContent === 'ม.ปลาย')) {
-                        btn.classList.add('active');
-                    } else {
-                        btn.classList.remove('active');
-                    }
-                });
-            } else {
-                document.getElementById('header-division-switch').style.display = 'none';
-            }
-            
-            if (viewId === 'view-assignment') {
-                document.getElementById('header-auto-assign').style.display = 'flex';
-            } else {
-                document.getElementById('header-auto-assign').style.display = 'none';
-            }
-            
-            
-            // ??????????????????
-            const activeNav = document.querySelector(`.nav-item[data-target="${viewId}"]`);
-            if (activeNav) {
-                activeNav.classList.add('active');
-                // ?????? Title ??????????
-                document.getElementById('current-page-title').textContent = activeNav.textContent.trim();
-            }
-            
-            // ???????????????????????????????????????
-            if (viewId === 'view-tournaments' && typeof updateZoom === 'function') {
-                setTimeout(updateZoom, 50);
-            }
-            
-            // ถ้าเลือกเมนูจัดโต๊ะ ให้ดึงข้อมูลมาแสดงใหม่
-            if (viewId === 'view-assignment' && typeof renderAssignmentView === 'function') {
-                renderAssignmentView();
-            }
+// สลับระดับชั้น (ม.ต้น / ม.ปลาย)
+function toggleDivision(division, btnElement) {
+    const switchContainer = btnElement.parentElement;
+    switchContainer.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
+    btnElement.classList.add('active');
 
-            if (viewId === 'view-manual-score' && typeof renderManualScoreView === 'function') {
-                renderManualScoreView();
-            }
-
-            // Trigger specific rendering based on view
-            if (viewId === 'view-announcer') {
-                if (typeof renderAnnouncerView === 'function') {
-                    renderAnnouncerView();
-                }
-            }
-            
-            // ปิด Sidebar บนมือถืออัตโนมัติ
-            if (window.innerWidth <= 768) {
-                document.getElementById('sidebar').classList.remove('show');
-                document.getElementById('sidebarOverlay').classList.remove('show');
-            }
-        }
-
-        // ????????????/??? Sidebar ????????
-        function toggleSidebar() {
-            document.getElementById('sidebar').classList.toggle('show');
-            document.getElementById('sidebarOverlay').classList.toggle('show');
-        }
-
-        // สลับระดับชั้น (ม.ต้น / ม.ปลาย)
-        function toggleDivision(division, btnElement) {
-            const switchContainer = btnElement.parentElement;
-            switchContainer.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
-            btnElement.classList.add('active');
-
-            window.DIVISION_KEY = division;
-            localStorage.setItem('activeDivision', division);
-            
-            const activeView = window.currentActiveView;
-            window.viewDivisionStates[activeView] = division;
-            localStorage.setItem('viewDivisionStates', JSON.stringify(window.viewDivisionStates));
-            
-            // โหลดข้อมูลจากที่แคชไว้เบื้องหลังทันที (ไม่ต้องรอโหลดจากเซิร์ฟเวอร์ใหม่)
-            if (window.tournamentAllData && window.tournamentAllData[division]) {
-                if (typeof renderTournament === 'function') {
-                    renderTournament(window.tournamentAllData[division]);
-                }
-                
-                if (activeView === 'view-results' && typeof renderResults === 'function') {
-                    renderResults(window.tournamentAllData[division]);
-                }
-                if (activeView === 'view-assignment' && typeof renderAssignmentView === 'function') {
-                    renderAssignmentView();
-                }
-                if (activeView === 'view-manual-score' && typeof renderManualScoreView === 'function') {
-                    renderManualScoreView();
-                }
-            } else {
-                if (typeof fetchTournamentData === 'function') {
-                    fetchTournamentData();
-                }
-            }
-        }
+    window.DIVISION_KEY = division;
+    localStorage.setItem('activeDivision', division);
     
-
+    const activeView = window.currentActiveView;
+    window.viewDivisionStates[activeView] = division;
+    localStorage.setItem('viewDivisionStates', JSON.stringify(window.viewDivisionStates));
+    
+    // โหลดข้อมูลจากที่แคชไว้เบื้องหลังทันที (ไม่ต้องรอโหลดจากเซิร์ฟเวอร์ใหม่)
+    if (window.tournamentAllData && window.tournamentAllData[division]) {
+        if (typeof renderTournament === 'function') {
+            renderTournament(window.tournamentAllData[division]);
+        }
+        
+        if (activeView === 'view-results' && typeof renderResults === 'function') {
+            renderResults(window.tournamentAllData[division]);
+        }
+        if (activeView === 'view-assignment' && typeof renderAssignmentView === 'function') {
+            renderAssignmentView();
+        }
+        if (activeView === 'view-manual-score' && typeof renderManualScoreView === 'function') {
+            renderManualScoreView();
+        }
+    } else {
+        if (typeof fetchTournamentData === 'function') {
+            fetchTournamentData();
+        }
+    }
+}
 
 // ==========================================
 // GITHUB PAGES OVERRIDE LOGIC
@@ -1147,19 +1478,19 @@ async function fetchTournamentData() {
             
             const currentDiv = window.DIVISION_KEY || 'middle';
             if (window.tournamentAllData[currentDiv]) {
-                if (typeof renderTournament === 'function' && window.currentActiveView === 'view-tournaments') {
+                if (typeof renderTournament === 'function') {
                     renderTournament(window.tournamentAllData[currentDiv]);
                 }
-                if (typeof renderResults === 'function' && window.currentActiveView === 'view-results') {
+                if (typeof renderResults === 'function') {
                     renderResults(window.tournamentAllData[currentDiv]);
                 }
-                if (typeof renderAnnouncerView === 'function' && window.currentActiveView === 'view-announcer') {
+                if (typeof renderAnnouncerView === 'function') {
                     renderAnnouncerView();
                 }
             }
         }
     } catch (e) {
-        console.error("Error fetching data:", e);
+        console.error('Error fetching data:', e);
     }
 }
 
@@ -1171,4 +1502,3 @@ function verifyAdminToken() { }
 function openLoginModal() { alert('ส่วนนี้สำหรับผู้ชม ไม่สามารถ Login ได้ครับ'); }
 function assignTable() { }
 function updateScore() { }
-
